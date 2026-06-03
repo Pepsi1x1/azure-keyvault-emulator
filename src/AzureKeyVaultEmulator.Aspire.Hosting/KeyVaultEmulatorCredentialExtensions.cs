@@ -34,14 +34,25 @@
             var hostTenantId = Environment.GetEnvironmentVariable("AZURE_TENANT_ID");
             var tenantId = string.IsNullOrWhiteSpace(hostTenantId) ? _emulatorTenantId : hostTenantId;
 
-            return consumer
-                .WithEnvironment("AZURE_AUTHORITY_HOST", emulator.GetEndpoint("https"))
-                .WithEnvironment(ctx =>
+            return consumer.WithEnvironment(ctx =>
+            {
+                var endpoint = emulator.Resource.Annotations
+                    .OfType<EndpointAnnotation>()
+                    .FirstOrDefault(a => a.UriScheme == "https" || a.Name == "https");
+
+                var emulatorUrl = endpoint?.AllocatedEndpoint is { } allocated
+                    ? allocated.UriString
+                    : null;
+
+                ctx.EnvironmentVariables["AZURE_TENANT_ID"] = tenantId;
+                ctx.EnvironmentVariables["AZURE_CLIENT_ID"] = _emulatorClientId;
+                ctx.EnvironmentVariables["AZURE_CLIENT_SECRET"] = _emulatorClientSecret;
+
+                if (!string.IsNullOrWhiteSpace(emulatorUrl))
                 {
-                    ctx.EnvironmentVariables["AZURE_TENANT_ID"] = tenantId;
-                    ctx.EnvironmentVariables["AZURE_CLIENT_ID"] = _emulatorClientId;
-                    ctx.EnvironmentVariables["AZURE_CLIENT_SECRET"] = _emulatorClientSecret;
-                });
+                    ctx.EnvironmentVariables["AZURE_AUTHORITY_HOST"] = emulatorUrl;
+                }
+            });
         }
     }
 }
