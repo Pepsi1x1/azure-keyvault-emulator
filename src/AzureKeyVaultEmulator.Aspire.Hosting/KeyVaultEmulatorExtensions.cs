@@ -5,8 +5,6 @@ using AzureKeyVaultEmulator.Aspire.Hosting.Exceptions;
 using AzureKeyVaultEmulator.Aspire.Hosting.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
-using System.Net;
 
 namespace AzureKeyVaultEmulator.Aspire.Hosting
 {
@@ -15,7 +13,6 @@ namespace AzureKeyVaultEmulator.Aspire.Hosting
         private const string _keyVaultEmulatorHealthCheckEndpointName = "https";
         private const string _keyVaultEmulatorHealthCheckPath = "/token";
         private const string _keyVaultEmulatorVaultUriOutputName = "vaultUri";
-        private static readonly HttpClient _healthCheckHttpClient = new();
 
         /// <summary>
         /// Directly adds the AzureKeyVaultEmulator as a container instead of routing through an Azure resource.
@@ -89,7 +86,6 @@ namespace AzureKeyVaultEmulator.Aspire.Hosting
             ArgumentException.ThrowIfNullOrEmpty(hostCertificatePath);
 
             var containerTag = options.ImageTag ?? AzureKeyVaultEnvHelper.GetContainerTag();
-            var healthCheckKey = $"{builder.Resource.Name}_{_keyVaultEmulatorHealthCheckEndpointName}_{_keyVaultEmulatorHealthCheckPath}_200_check";
 
             var keyVaultResourceBuilder = builder.ApplicationBuilder.CreateResourceBuilder(new AzureKeyVaultEmulatorResource(builder.Resource))
                    .WithImage(KeyVaultEmulatorContainerConstants.Image)
@@ -144,38 +140,11 @@ namespace AzureKeyVaultEmulator.Aspire.Hosting
                         await SeedCertificatesFromAppHostAsync(emulatedResource.VaultUri, ct);
                         await SeedKeysFromAppHostAsync(emulatedResource.VaultUri, ct);
                     })
-                    .WithAnnotation(new HealthCheckAnnotation(healthCheckKey))
+                    .WithHttpHealthCheck(
+                        path: _keyVaultEmulatorHealthCheckPath,
+                        statusCode: 200,
+                        endpointName: _keyVaultEmulatorHealthCheckEndpointName)
                     .WithAnnotation(new EmulatorResourceAnnotation());
-
-            builder.ApplicationBuilder.Services.AddHealthChecks()
-                .AddAsyncCheck(healthCheckKey, async ct =>
-                {
-                    var endpoint = keyVaultResourceBuilder.Resource.Annotations
-                        .OfType<EndpointAnnotation>()
-                        .FirstOrDefault(a => a.Name == _keyVaultEmulatorHealthCheckEndpointName);
-
-                    if (endpoint?.AllocatedEndpoint is not { } allocatedEndpoint)
-                        return HealthCheckResult.Unhealthy($"The HTTPS endpoint for resource '{builder.Resource.Name}' has not been allocated.");
-
-                    try
-                    {
-                        using var response = await _healthCheckHttpClient.GetAsync(
-                            new Uri(new Uri(allocatedEndpoint.UriString), _keyVaultEmulatorHealthCheckPath),
-                            ct);
-
-                        return response.StatusCode == HttpStatusCode.OK
-                            ? HealthCheckResult.Healthy()
-                            : HealthCheckResult.Unhealthy($"Expected status code 200 but received {(int)response.StatusCode}.");
-                    }
-                    catch (HttpRequestException ex)
-                    {
-                        return HealthCheckResult.Unhealthy("Failed to call the Azure Key Vault Emulator health endpoint.", ex);
-                    }
-                    catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
-                    {
-                        return HealthCheckResult.Unhealthy("Timed out calling the Azure Key Vault Emulator health endpoint.", ex);
-                    }
-                });
 
             builder.MapResourceEvents(keyVaultResourceBuilder);
 
